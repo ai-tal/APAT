@@ -2,13 +2,7 @@
 
 **Subject reviewed:** `APAT_v3_M7_110_5.m` — 5,199 lines, one App Designer-style class, 183 functions (95 methods, 34 file-scope functions, the rest nested/self-test), 622 lines of hand-written layout in `createComponents` (3072–3693) plus 58 lines of layout helpers (3013–3070).
 
-**Also reviewed:** the previous improvement-plan draft (`APAT_M8_improvement_plan.md`, 1,053 lines; defect register D01–D70) and its companion (`APAT_M8_improvement_plan_Review_Findings.md`, 267 lines), together with the owner's directions for this pass:
-
-- **O1** — review the whole code again, deeply; make the logic/implementation more concise (≤ ≈ 3,000 lines), seamless, clean, transparent and fast/robust — conciseness of *logic*, not of formatting.
-- **O2** — the previous plan's **coverage query** design (`cov_dist / cov_eval / cov_inverse`, `job_eval / job_inverse`, distribution cache) is too complex and not seamless; use `interp1` on the curve as M7 does — it is a small 1-D curve, milliseconds do not matter.
-- **O3** — keep the findings/comparison and the standalone plan separate; the plan must not refer to previous plan versions.
-
-**Companion document:** `APAT_M8_Improvement_Plan.md` — the standalone plan. It does **not** refer to this document or to any earlier draft; it is anchored only to M7 line numbers and its own appendices. This document is the *audit trail*: what was checked, what stands from the previous draft, what was changed and why, and how the defect IDs map.
+**Companion document:** `APAT_M8_Improvement_Plan.md` — the standalone plan. This document is the *audit trail*: what was checked, what stands from the previous draft, what was changed and why, and how the defect IDs map.
 
 ---
 
