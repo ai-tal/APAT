@@ -1,5 +1,5 @@
 classdef APAT_v3_M8_7 < matlab.apps.AppBase
-% APAT v3 Milestone 8 — grid-native pattern, one derivation function, one pattern registry, one dispatcher.
+% APAT v3 Milestone 7 — grid-native pattern, one derivation function, one pattern registry, one dispatcher.
 %
 %   SOURCE ─► PATTERN(Rev) ─► GEOMETRY ─► DERIVED(Rev, Params)      all stored in Pats(k); Main tab = Pats(Main)
 %      │                                        ├─► PLOTS / CUTS / TABLES / METADATA (+Map)
@@ -8,8 +8,12 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
 %
 %   Rule: widgets are read only in readConfig/readCoverageConfig; numerics never see a widget; widgets are written
 %   only by apply*/render* functions. Every callback is one expression: @(~,~) app.on("scope").
+%
+%   Retained-graphics invariant (M8.8): every "maybe-not-yet-created" handle slot (Gfx.Full(k).Surface/Marker/Tip) holds a
+%   gobjects(1) placeholder, never gobjects(0), so isgraphics(slot) is always a logical SCALAR and can guard && / if directly.
+%   Cache identity: every built registry entry carries a unique Stamp; render/table cache keys are derived from app.dataKey(e).
 
-%>>Error: "Operands to the short-circuit AND (&&) and OR (||) operators must be convertible to logical scalars. Use the ANY or ALL functions to reduce array operands to logical scalars. For elementwise operations, use the AND (&) and OR (|) operators instead. (in APAT_v3_M8_7.renderFull line 441:"if isgraphics(s.Surface) && isequal(size(s.Surface.CData), size(C)), set(s.Surface, 'XData', X, 'YData', Y, 'ZData', Z, 'CData', C);")
+% Contour plot not showing properly! It shows as empty 3D axes
 
     properties (GetAccess = public, SetAccess = private)
         isClosing logical = false
@@ -58,7 +62,7 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
     end
 
     properties (Access = private)
-        Pats = struct('Name', {}, 'Path', {}, 'Source', {}, 'Pattern', {}, 'Geometry', {}, 'Derived', {}, 'Params', {}, 'Native', {})
+        Pats = struct('Name', {}, 'Path', {}, 'Source', {}, 'Pattern', {}, 'Geometry', {}, 'Derived', {}, 'Params', {}, 'Native', {}, 'Stamp', {})
         Main double = 0                % index into Pats shown on the Main tab (0 = nothing loaded)
         View struct = struct()         % last readConfig() result (display choices + Params)
         Map struct = struct()          % geo_displayMap(): column permutation + axis vectors for the display convention
@@ -125,15 +129,17 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
     methods (Access = private)
         function startupFcn(app)
             app.StatusTimer = timer('ExecutionMode', 'singleShot', 'StartDelay', 3);
-            app.Gfx.Menu = uicontextmenu(app.UIFigure);
-            uimenu(app.Gfx.Menu, 'Text', 'Delete DataTips', 'MenuSelectedFcn', @(m, ~) delete(findobj(m.ContextMenu.Parent, 'Type', 'datatip')));
+            % One shared context menu; the opening event records the right-clicked axes so "Delete DataTips" acts on that axes only.
+            app.Gfx.Menu = uicontextmenu(app.UIFigure, 'ContextMenuOpeningFcn', @(c, ev) set(c, 'UserData', ancestor(ev.ContextObject, {'axes', 'polaraxes'})));
+            uimenu(app.Gfx.Menu, 'Text', 'Delete DataTips', 'MenuSelectedFcn', @(m, ~) delete(findall(m.Parent.UserData, 'Type', 'datatip')));
             app.Gfx.Maps = struct('gain', jet(256), 'ar', interp1([-1 0 1], [0 0 1; 1 1 1; 1 0 0], linspace(-1, 1, 256)));
             app.Gfx.TableKey = '';
             % Five full-pattern views behind one renderer: axes, range controls, kind and camera per row.
+            % Surface/Marker/Tip start as gobjects(1) placeholders (isgraphics == scalar false), never gobjects(0) (isgraphics == []).
             axesList = {app.Single_Axes_Ctr, app.Single_paxPattern, app.Single_Axes_3dSph, app.Single_Axes_3dPol, app.Single_Axes_3dRect};
             app.Gfx.Full = struct('Tab', {app.Single_tabContour, app.Single_tabCircular, app.Single_tab3DSpherical, app.Single_tab3DPolar, app.Single_tab3DRect}, ...
                 'Axes', axesList, 'Kind', {"contour", "fisheye", "sphere", "polar", "rect"}, 'Camera', {[], [], [135 25], [135 25], [-35 35]}, ...
-                'Surface', gobjects(0), 'Marker', gobjects(0), 'Tip', gobjects(0), 'Colorbar', gobjects(0), 'Key', '');
+                'Surface', gobjects(1), 'Marker', gobjects(1), 'Tip', gobjects(1), 'Colorbar', gobjects(1), 'Key', '');
             for k = 1:5
                 ax = axesList{k}; ax.ContextMenu = app.Gfx.Menu; app.Gfx.Full(k).Colorbar = colorbar(ax);
                 if k == 2, hold(ax, 'on'); continue; end
@@ -252,7 +258,12 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
             P = pat_build(S, freqIndex); native = [P.dTheta, P.dPhi]; app.perf("Build pattern"); app.checkCancelled();
             if oneDegree && any(abs(native - 1) > 1e-9), P = pat_resample(P, 1); app.perf("Resample"); app.checkCancelled(); end
             G = geo_build(P); D = pat_derive(P, G, prm); app.perf("Derive");
-            e = struct('Name', name, 'Path', path, 'Source', S, 'Pattern', P, 'Geometry', G, 'Derived', D, 'Params', prm, 'Native', native);
+            e = struct('Name', name, 'Path', path, 'Source', S, 'Pattern', P, 'Geometry', G, 'Derived', D, 'Params', prm, 'Native', native, 'Stamp', tic);   % Stamp: unique per build
+        end
+
+        function k = dataKey(~, e)
+            %DATAKEY Identity of the data behind every cached render: the build (file, block, step) and the derivation parameters.
+            k = {e.Stamp, e.Params};
         end
 
         function update(app, scope)
@@ -304,7 +315,7 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
                 if startsWith(e.Derived.Pol.label, 'Linear'), app.CutFieldBasisDropDown.Value = 'Linear'; else, app.CutFieldBasisDropDown.Value = 'Circular'; end
             end
             colNames = fieldnames(e.Derived.Cols); od = app.Single_DropDown_output;
-            if ~isequal(od.Items(2:end), colNames.')
+            if ~isequal(regexprep(od.Items(2:end), '^✓ ?', ''), colNames.')        % compare bare names: applyFilterStyles adds ✓ marks
                 [od.Items, od.ItemsData] = deal([{'--- column filter ---'}, colNames.'], 0:numel(colNames)); od.Value = 0;
                 app.OutMask = ~cellfun(@(n) app.hiddenOf(n), colNames.');
             end
@@ -343,7 +354,8 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
                 case "cov", sl = gobjects(0); mn = app.Cov_Spinner_ThreshMin; mx = app.Cov_Spinner_ThreshMax;
                 case "covX", sl = app.Cov_Spinner_XRange; mn = app.Cov_Spinner_XMin; mx = app.Cov_Spinner_XMax;
             end
-            if ~fromSlider, set(sl, 'Limits', app.HardRange, 'Value', lim); set(sl, 'Limits', lim); end   % widen, set, then tighten the travel
+            if fromSlider, set(sl, 'Value', lim);                                                          % siblings follow the dragged slider
+            else, set(sl, 'Limits', app.HardRange, 'Value', lim); set(sl, 'Limits', lim); end              % widen, set, then tighten the travel
             set(mn, 'Limits', [app.HardRange(1), lim(2) - gap], 'Value', lim(1)); set(mx, 'Limits', [lim(1) + gap, app.HardRange(2)], 'Value', lim(2));
             if store, app.Range.(group) = lim; end
             if group == "covX", set(app.Cov_Axes, 'XLimMode', 'manual', 'XLim', lim); end
@@ -437,20 +449,23 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
             %RENDERFULL Retained-mode render of full-pattern view k (default: the visible tab). Component change = one CData set.
             if nargin < 2, k = find(arrayfun(@(s) isequal(s.Tab, app.Single_tabPlots.SelectedTab), app.Gfx.Full), 1); end
             s = app.Gfx.Full(k); e = app.pat(); V = app.View; M = app.Map; lim = app.themeLimits(); C = app.col(); C = C(:, M.ColIdx);
-            key = jsonencode({e.Pattern.Revision, e.Params, V.Component, M.Key, lim, V.CStep, V.Camera});
+            key = jsonencode([app.dataKey(e), {V.Component, M.Key, lim, V.CStep, V.Camera}]);
             if ~strcmp(s.Key, key)
                 [X, Y, Z] = app.viewCoords(s.Kind, C, lim); unit = e.Pattern.Meta.UnitLabel; label = app.compLabel(); ax = s.Axes;
                 if isgraphics(s.Surface) && isequal(size(s.Surface.CData), size(C)), set(s.Surface, 'XData', X, 'YData', Y, 'ZData', Z, 'CData', C);
-                else, delete(s.Surface); s.Surface = surface(ax, X, Y, Z, C, 'EdgeColor', 'none', 'FaceColor', 'interp', 'ContextMenu', app.Gfx.Menu);
+                else                                            % grid changed: rebuild the surface and let placeMarker recreate the marker on top of it
+                    delete([s.Surface, s.Marker, s.Tip]); [s.Marker, s.Tip] = deal(gobjects(1));
+                    s.Surface = surface(ax, X, Y, Z, C, 'EdgeColor', 'none', 'FaceColor', 'interp', 'ContextMenu', app.Gfx.Menu);
                 end
                 map = app.Gfx.Maps.gain; if app.isAR(), map = app.Gfx.Maps.ar; end
-                clim(ax, lim); colormap(ax, map); ticks = util_ticks(lim, V.CStep); if ~isempty(ticks), s.Colorbar.Ticks = ticks; end
+                clim(ax, lim); colormap(ax, map); ticks = util_ticks(lim, V.CStep);
+                if isempty(ticks), s.Colorbar.TicksMode = 'auto'; else, s.Colorbar.Ticks = ticks; end
                 s.Colorbar.Label.String = sprintf('%s (%s)', label, unit);
                 switch s.Kind
                     case {"contour", "rect"}
                         set(ax, 'XLim', [M.PhiAxis(1), M.PhiAxis(end)], 'YLim', sort([M.ThetaAxis(1), M.ThetaAxis(end)]), 'YDir', M.ThetaDir, 'Box', 'on', 'Layer', 'top');
                         if s.Kind == "contour", set(ax, 'XTick', M.PhiAxis(1):30:M.PhiAxis(end), 'YTick', min(M.ThetaAxis):15:max(M.ThetaAxis), 'DataAspectRatio', [1 1 1]); title(ax, label, 'Interpreter', 'none');
-                        else, set(ax, 'XTick', M.PhiAxis(1):60:M.PhiAxis(end), 'YTick', min(M.ThetaAxis):30:max(M.ThetaAxis), 'ZLim', lim); grid(ax, 'on'); if ~isempty(ticks), ax.ZTick = ticks; end
+                        else, set(ax, 'XTick', M.PhiAxis(1):60:M.PhiAxis(end), 'YTick', min(M.ThetaAxis):30:max(M.ThetaAxis), 'ZLim', lim); grid(ax, 'on'); if isempty(ticks), ax.ZTickMode = 'auto'; else, ax.ZTick = ticks; end
                             zlabel(ax, sprintf('%s (%s)', label, unit), 'Interpreter', 'none'); title(ax, label, 'Interpreter', 'none'); app.applyCamera(k);
                         end
                         xlabel(ax, 'Phi (degree)'); ylabel(ax, M.ThetaLabel + " (degree)");
@@ -583,7 +598,7 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
             %RENDERTABLES Input table once per source; Results table only when its tab is visible and its key changed (D43).
             e = app.pat();
             if ~app.RawShown, set(app.Single_Table_DataIn, 'Data', e.Source.Raw, 'ColumnName', e.Source.Raw.Properties.VariableNames, 'Visible', 'on'); app.RawShown = true; end
-            key = jsonencode({e.Path, e.Pattern.Revision, e.Params, app.Map.Key, app.OutMask});
+            key = jsonencode([app.dataKey(e), {app.Map.Key, app.OutMask}]);
             if strcmp(app.Gfx.TableKey, key) || ~isequal(app.Single_tabData.SelectedTab, app.Single_tabDataOut), return; end
             T = app.resultsTable(); set(app.Single_Table_DataOut, 'Data', T, 'ColumnName', T.Properties.VariableNames); app.Gfx.TableKey = key;
         end
@@ -675,7 +690,7 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
             %ONPROCESS Loss/Rx/Pt/R → one derivation and a redraw; a changed generic text format → a reload (D55).
             if app.Main == 0, uialert(app.UIFigure, 'No file! Load a pattern first.', 'Warning', 'Icon', 'warning'); return; end
             e = app.pat();
-            if app.isTextFile(e.Path) && ~strcmp(string(app.Single_DropDown_TextFormat.Value), extractBetween(e.Pattern.Meta.Format + ")", "(", ")"))
+            if app.isTextFile(e.Path) && ~isequal(string(app.Single_DropDown_TextFormat.Value), extractBetween(e.Pattern.Meta.Format + ")", "(", ")"))
                 app.loadMain(e.Path, "Processing"); return
             end
             app.on("params"); app.setStatus(app.Single_StatusBar, ['Re-processed <b>' e.Name '</b> with current parameters ' char(9989)], true);
@@ -793,7 +808,7 @@ classdef APAT_v3_M8_7 < matlab.apps.AppBase
                 delete(old);
                 node = uitreenode(app.Cov_TreeNode_Results, 'Text', ['📡 ' name]); node.NodeData = struct('kind', 'pattern', 'k', k, 'path', fp, 'name', name);
                 expand(app.Cov_Tree); app.Cov_Tree.CheckedNodes = [app.Cov_Tree.CheckedNodes; node]; app.Cov_Tree.SelectedNodes = node;
-                app.Range.Auto.cov = true; app.covSelect(); app.covFinish(app.covJobs());
+                app.Range.Auto.cov = true; app.covSelect();                                     % covSelect already refreshes lines, legend and table
                 app.setStatus(app.Cov_StatusBar, sprintf('Pattern "<b>%s</b>" added %s ready to compute coverage.', name, char(8212)), false);
             catch err
                 app.showError(err, 'Coverage Load Error');
@@ -1195,7 +1210,7 @@ if ext == "FFE"
         n = numel(sscanf(char(rows(1)), '%f')); M = reshape(sscanf(char(strjoin(rows, newline)), '%f'), n, []).';
         [Eth, Eph] = io_fields(M, s); S.Blocks{b} = io_block(M(:, 1), M(:, 2), Eth, Eph);
     end
-    S.Raw = array2table(M(:, 1:6), 'VariableNames', io_rawNames(s)); if numel(mark) > 1, S.Meta.Notes(end + 1) = sprintf("%d frequency blocks; block 1 shown in the Input tab.", numel(mark)); end
+    S.Raw = S.Blocks{1}; if numel(mark) > 1, S.Meta.Notes(end + 1) = sprintf("%d frequency blocks; block 1 shown in the Input tab.", numel(mark)); end   % FFE raw == block layout
     return
 end
 [nHdr, ffd, t] = io_headerLines(fp);
@@ -1262,7 +1277,7 @@ if fmt == "gain"
     ti = find(contains(low(1:2), ["theta" "el"]), 1); pj = find(contains(low(1:2), ["phi" "az"]), 1); order = [1 2];
     if hasHdr && ~isempty(ti) && ~isempty(pj) && ti ~= pj, order = [ti pj]; S.Meta.Notes(end + 1) = "θ/φ columns identified by their header names.";
     else, if max(c1) - min(c1) > max(V(:, 1)) - min(V(:, 1)), order = [2 1]; end, S.Meta.Notes(end + 1) = "θ/φ columns assigned by span (the wider span is φ); no usable header."; end
-    vn = matlab.lang.makeValidName(cellstr(names(3:end))); if ~hasHdr, vn = cellstr(compose('Gain%d_dB', 1:nc - 2)); if nc == 3, vn = {'Gain_dB'}; end, end
+    vn = matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(cellstr(names(3:end))), {'Theta', 'Phi'}); if ~hasHdr, vn = cellstr(compose('Gain%d_dB', 1:nc - 2)); if nc == 3, vn = {'Gain_dB'}; end, end
     B = [table(raw{:, order(1)}, raw{:, order(2)}, 'VariableNames', {'Theta', 'Phi'}), raw(:, 3:end)]; B.Properties.VariableNames(3:end) = vn;
     if ~hasHdr, raw.Properties.VariableNames(order) = {'Theta', 'Phi'}; raw.Properties.VariableNames(3:end) = vn; end
     S.Meta.IsGainOnly = true; S.Meta.ColNames = string(vn); S.Meta.Format = "Generic text (gain)"; S.Meta.Unit = "dB"; S.Meta.UnitLabel = "dB";
@@ -1581,7 +1596,7 @@ end
 function k = util_colKind(name)
 %UTIL_COLKIND gain | ar | plf | phase | link | other, from a column name (drives loss, theme, cuts, visibility, resampling domain).
 s = regexprep(lower(string(name)), '[^a-z0-9]', '');
-if startsWith(s, "ar") || contains(s, "axialratio"), k = "ar";
+if s == "ar" || startsWith(s, "ardb") || contains(s, "axialratio"), k = "ar";        % not every "ar…" column (e.g. Array_Gain_dBi) is an axial ratio
 elseif startsWith(s, "plf"), k = "plf";
 elseif contains(s, "phase") || endsWith(s, "deg") || endsWith(s, "dg"), k = "phase";
 elseif contains(s, ["eirp" "pfd" "erms"]), k = "link";
